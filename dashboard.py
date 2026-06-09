@@ -1,128 +1,59 @@
+# dashboard.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
-import time
 
 from sentimiento_extractor import obtener_fear_greed, obtener_noticias_mercado
 from scorer import score_fundamental, fmt_mktcap, fmt_num
-
-API_KEY = "NTTE78R1NO78U4OV"
-
-BMV       = ["AMXL.MX","FEMSAUBD.MX","BIMBOA.MX","WALMEX.MX","GMEXICOB.MX"]
-NYSE      = ["AAPL","NVDA","MSFT","TSLA","META"]
-PENNY     = ["SNDL","CLOV","GRAB","HIMS","SOFI"]
-HIGH_BETA = ["RIOT","MARA","COIN","PLTR","HOOD"]
-CRYPTO    = ["BTC","ETH","SOL","BNB","DOGE"]
+from acciones_extractor import (obtener_todos, obtener_quote,
+                                 obtener_crypto_quote, API_KEY,
+                                 BMV, NYSE, PENNY, HIGH_BETA, CRYPTO)
 
 st.set_page_config(page_title="Radar Fundamental", page_icon="📈", layout="wide")
 st.title("📈 Radar de Análisis Fundamental")
-st.caption("BMV · NYSE/NASDAQ · Penny Stocks · Beta Elevada · Cripto — Alpha Vantage")
+st.caption("BMV · NYSE/NASDAQ · Penny Stocks · Beta Elevada · Cripto — Finnhub API")
 
 if st.button("🔄 Actualizar datos"):
     st.cache_data.clear()
     st.rerun()
 
-def obtener_quote(symbol):
+def obtener_historial(symbol: str) -> pd.DataFrame:
+    import time as t
     try:
-        r = requests.get("https://www.alphavantage.co/query", params={
-            "function": "GLOBAL_QUOTE",
-            "symbol"  : symbol,
-            "apikey"  : API_KEY,
-        }, timeout=10)
-        data = r.json().get("Global Quote", {})
-        if not data:
-            return {}
-        precio = float(data.get("05. price", 0))
-        cambio = float(data.get("10. change percent", "0%").replace("%",""))
-        return {
-            "Ticker"       : symbol.replace(".MX",""),
-            "Nombre"       : symbol.replace(".MX",""),
-            "Precio"       : round(precio, 2),
-            "Cambio %"     : round(cambio, 2),
-            "Volumen"      : int(data.get("06. volume", 0)),
-            "52w Alto"     : float(data.get("03. high", 0)),
-            "52w Bajo"     : float(data.get("04. low", 0)),
-            "Beta"         : None,
-            "P/E"          : None,
-            "Mkt Cap"      : None,
-            "Recomendacion": "—",
-        }
-    except Exception:
-        return {}
-
-def obtener_crypto(symbol):
-    try:
-        r = requests.get("https://www.alphavantage.co/query", params={
-            "function"     : "CURRENCY_EXCHANGE_RATE",
-            "from_currency": symbol,
-            "to_currency"  : "USD",
-            "apikey"       : API_KEY,
-        }, timeout=10)
-        data = r.json().get("Realtime Currency Exchange Rate", {})
-        if not data:
-            return {}
-        precio = float(data.get("5. Exchange Rate", 0))
-        return {
-            "Ticker"       : symbol,
-            "Nombre"       : data.get("1. From_Currency Name", symbol)[:20],
-            "Precio"       : round(precio, 4),
-            "Cambio %"     : 0.0,
-            "Volumen"      : 0,
-            "52w Alto"     : 0,
-            "52w Bajo"     : 0,
-            "Beta"         : None,
-            "P/E"          : None,
-            "Mkt Cap"      : None,
-            "Recomendacion": "—",
-        }
-    except Exception:
-        return {}
-
-def obtener_historial(symbol):
-    try:
-        r = requests.get("https://www.alphavantage.co/query", params={
-            "function"  : "TIME_SERIES_DAILY",
-            "symbol"    : symbol,
-            "outputsize": "compact",
-            "apikey"    : API_KEY,
-        }, timeout=10)
-        data = r.json().get("Time Series (Daily)", {})
-        if not data:
+        ahora  = int(t.time())
+        inicio = ahora - 60 * 24 * 3600  # 60 días
+        r = requests.get(
+            "https://finnhub.io/api/v1/stock/candle",
+            params={
+                "symbol"    : symbol,
+                "resolution": "D",
+                "from"      : inicio,
+                "to"        : ahora,
+                "token"     : API_KEY,
+            },
+            timeout=10
+        )
+        data = r.json()
+        if data.get("s") != "ok":
             return pd.DataFrame()
-        rows = [{"Date": k, "Close": float(v["4. close"])}
-                for k, v in list(data.items())[:60]]
-        df = pd.DataFrame(rows)
-        df["Date"] = pd.to_datetime(df["Date"])
+        df = pd.DataFrame({
+            "Date" : pd.to_datetime(data["t"], unit="s"),
+            "Close": data["c"],
+        })
         return df.sort_values("Date")
     except Exception:
         return pd.DataFrame()
 
-def cargar_grupo(tickers, nombre, es_crypto=False):
-    filas = []
-    for t in tickers:
-        dato = obtener_crypto(t) if es_crypto else obtener_quote(t)
-        if dato:
-            dato["Grupo"] = nombre
-            filas.append(dato)
-        time.sleep(0.3)
-    return pd.DataFrame(filas) if filas else pd.DataFrame()
-
 @st.cache_data(ttl=900, show_spinner=False)
 def cargar_todos():
-    grupos = {
-        "BMV"      : cargar_grupo(BMV,       "🇲🇽 BMV"),
-        "NYSE"     : cargar_grupo(NYSE,      "🇺🇸 NYSE/NASDAQ"),
-        "Penny"    : cargar_grupo(PENNY,     "💰 Penny Stocks"),
-        "High Beta": cargar_grupo(HIGH_BETA, "⚡ Beta Elevada"),
-        "Crypto"   : cargar_grupo(CRYPTO,    "🪙 Cripto", es_crypto=True),
-    }
-    return grupos, obtener_fear_greed(), obtener_noticias_mercado()
+    return obtener_todos(), obtener_fear_greed(), obtener_noticias_mercado()
 
-with st.spinner("📡 Consultando mercados..."):
+with st.spinner("📡 Consultando mercados en tiempo real..."):
     grupos, fear_greed, noticias = cargar_todos()
 
+# ── FEAR & GREED ─────────────────────────────────────────────
 st.divider()
 c1,c2,c3,c4,c5 = st.columns(5)
 c1.markdown(f"""
@@ -147,12 +78,15 @@ border-radius:12px;padding:14px;text-align:center">
 </div>""", unsafe_allow_html=True)
 
 st.divider()
-tabs = st.tabs(["🇲🇽 BMV","🇺🇸 NYSE/NASDAQ","💰 Penny Stocks","⚡ Beta Elevada","🪙 Cripto","📰 Noticias","🔍 Buscador"])
+
+# ── TABS ─────────────────────────────────────────────────────
+tabs = st.tabs(["🇲🇽 BMV","🇺🇸 NYSE/NASDAQ","💰 Penny Stocks",
+                "⚡ Beta Elevada","🪙 Cripto","📰 Noticias","🔍 Buscador"])
 
 def render_grupo(df_raw, tab, key):
     with tab:
         if df_raw.empty:
-            st.warning("⚠️ Sin datos. Límite de API alcanzado. Intenta en unos minutos.")
+            st.warning("⚠️ Sin datos disponibles.")
             return
         df = score_fundamental(df_raw)
         st.subheader("📊 Tabla de Oportunidades")
@@ -167,13 +101,15 @@ def render_grupo(df_raw, tab, key):
                 f"<tr><td><b>{row['Ticker']}</b></td>"
                 f"<td style='font-size:12px'>{row['Nombre']}</td>"
                 f"<td>${fmt_num(row['Precio'])}</td>"
-                f"<td style='color:{color_c};font-weight:bold'>{'▲' if cambio>=0 else '▼'} {fmt_num(abs(cambio))}%</td>"
+                f"<td style='color:{color_c};font-weight:bold'>"
+                f"{'▲' if cambio>=0 else '▼'} {fmt_num(abs(cambio))}%</td>"
                 f"<td>—</td><td>—</td><td>—</td>"
                 f"<td style='font-weight:bold;color:{color_s}'>{senal}</td>"
                 f"<td style='font-weight:bold;color:#1e3a5f'>{row['Score']}</td></tr>"
             )
 
-        ths = "".join(f"<th>{h}</th>" for h in ["Ticker","Nombre","Precio","Cambio %","Beta","P/E","Mkt Cap","Señal","Score"])
+        ths = "".join(f"<th>{h}</th>" for h in
+                      ["Ticker","Nombre","Precio","Cambio %","Beta","P/E","Mkt Cap","Señal","Score"])
         trs = "".join(fila_html(r) for _,r in df.iterrows())
         st.markdown(f"""
 <style>
@@ -187,14 +123,15 @@ def render_grupo(df_raw, tab, key):
 
         st.markdown("<br>", unsafe_allow_html=True)
         col1,col2 = st.columns(2)
+
         with col1:
             st.subheader("🏆 Score de Oportunidad")
             fig = px.bar(df.sort_values("Score"), x="Score", y="Ticker",
                         orientation="h", color="Score",
                         color_continuous_scale="RdYlGn", text="Score")
-            fig.update_layout(height=300,plot_bgcolor="white",showlegend=False,
+            fig.update_layout(height=350, plot_bgcolor="white", showlegend=False,
                              yaxis=dict(autorange="reversed"))
-            fig.update_traces(texttemplate="%{text}",textposition="outside")
+            fig.update_traces(texttemplate="%{text}", textposition="outside")
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
@@ -206,8 +143,8 @@ def render_grupo(df_raw, tab, key):
                 text=df["Cambio %"].apply(lambda x: f"{x:+.2f}%"),
                 textposition="outside",
             ))
-            fig2.update_layout(height=300,plot_bgcolor="white",
-                              xaxis=dict(zeroline=True,zerolinecolor="#333"))
+            fig2.update_layout(height=350, plot_bgcolor="white",
+                              xaxis=dict(zeroline=True, zerolinecolor="#333"))
             st.plotly_chart(fig2, use_container_width=True)
 
         st.subheader("📡 Detalle por activo")
@@ -227,6 +164,8 @@ def render_grupo(df_raw, tab, key):
             fig3.update_layout(plot_bgcolor="white", height=300)
             fig3.update_traces(line_color="#1e3a5f", line_width=2)
             st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("Historial no disponible para este activo.")
 
 render_grupo(grupos["BMV"],       tabs[0], "bmv")
 render_grupo(grupos["NYSE"],      tabs[1], "nyse")
@@ -246,7 +185,7 @@ padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0">
 
 with tabs[6]:
     st.subheader("🔍 Busca cualquier activo")
-    st.caption("Ejemplos: AAPL, TSLA, AMXL.MX, BTC")
+    st.caption("Ejemplos: AAPL, TSLA, AMXL.MX, BINANCE:BTCUSDT")
     col_inp,col_btn = st.columns([3,1])
     with col_inp:
         ticker_input = st.text_input("Ticker:", placeholder="Ej: TSLA")
@@ -261,7 +200,7 @@ with tabs[6]:
             c1,c2,c3 = st.columns(3)
             c1.metric("💵 Precio",   f"${fmt_num(dato['Precio'])}")
             c2.metric("📊 Cambio %", f"{dato['Cambio %']:+.2f}%")
-            c3.metric("📦 Volumen",  f"{dato['Volumen']:,}")
+            c3.metric("📌 Señal",    "—")
             with st.spinner("Cargando historial..."):
                 hist = obtener_historial(ticker_input.upper())
             if not hist.empty:
@@ -274,4 +213,4 @@ with tabs[6]:
             st.error(f"No se encontró '{ticker_input}'.")
 
 st.divider()
-st.caption("Alpha Vantage API · Fear & Greed Alternative.me · Solo informativo, no es consejo de inversión.")
+st.caption("Finnhub API · Fear & Greed Alternative.me · Solo informativo, no es consejo de inversión.")

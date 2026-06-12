@@ -35,6 +35,10 @@ def obtener_historial(symbol: str) -> pd.DataFrame:
             },
             timeout=10
         )
+        if r.status_code == 429:
+            st.toast("⚠️ Límite de API alcanzado al cargar el gráfico.", icon="⏳")
+            return pd.DataFrame()
+            
         data = r.json()
         if data.get("s") != "ok":
             return pd.DataFrame()
@@ -50,7 +54,7 @@ def obtener_historial(symbol: str) -> pd.DataFrame:
 def cargar_todos():
     return obtener_todos(), obtener_fear_greed(), obtener_noticias_mercado()
 
-with st.spinner("📡 Consultando mercados en tiempo real..."):
+with st.spinner("📡 Consultando mercados y calculando fundamentales..."):
     grupos, fear_greed, noticias = cargar_todos()
 
 # ── FEAR & GREED ─────────────────────────────────────────────
@@ -76,6 +80,13 @@ border-radius:12px;padding:14px;text-align:center">
 <div style="font-size:0.9rem;color:#16a34a">Score {mejor['Score']}</div>
 <div style="font-size:0.8rem">{mejor['Señal']}</div>
 </div>""", unsafe_allow_html=True)
+    else:
+        col.markdown("""
+<div style="background:#fff5f5;border:1px solid #fed7d7;
+border-radius:12px;padding:14px;text-align:center">
+<div style="font-size:0.75rem;color:#e53e3e">Datos no disponibles</div>
+<div style="font-size:0.8rem">Límite de API alcanzado</div>
+</div>""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -86,7 +97,7 @@ tabs = st.tabs(["🇲🇽 BMV","🇺🇸 NYSE/NASDAQ","💰 Penny Stocks",
 def render_grupo(df_raw, tab, key):
     with tab:
         if df_raw.empty:
-            st.warning("⚠️ Sin datos disponibles.")
+            st.warning("⚠️ Sin datos disponibles en este momento. Intenta actualizar en un minuto (Límite de API).")
             return
         df = score_fundamental(df_raw)
         st.subheader("📊 Tabla de Oportunidades")
@@ -97,13 +108,19 @@ def render_grupo(df_raw, tab, key):
             senal   = row["Señal"]
             color_s = {"🔥 FUERTE":"#16a34a","⚡ MODERADA":"#2563eb",
                        "👀 OBSERVAR":"#d97706","😴 DÉBIL":"#9ca3af"}.get(senal,"#333")
+            
+            # Formateando métricas que antes estaban en blanco
+            beta_str = f"{row['Beta']:.2f}" if pd.notna(row['Beta']) else "—"
+            pe_str = f"{row['P/E']:.1f}" if pd.notna(row['P/E']) else "—"
+            mkt_str = fmt_mktcap(row['Mkt Cap'])
+            
             return (
                 f"<tr><td><b>{row['Ticker']}</b></td>"
                 f"<td style='font-size:12px'>{row['Nombre']}</td>"
                 f"<td>${fmt_num(row['Precio'])}</td>"
                 f"<td style='color:{color_c};font-weight:bold'>"
                 f"{'▲' if cambio>=0 else '▼'} {fmt_num(abs(cambio))}%</td>"
-                f"<td>—</td><td>—</td><td>—</td>"
+                f"<td>{beta_str}</td><td>{pe_str}</td><td>{mkt_str}</td>"
                 f"<td style='font-weight:bold;color:{color_s}'>{senal}</td>"
                 f"<td style='font-weight:bold;color:#1e3a5f'>{row['Score']}</td></tr>"
             )
@@ -165,7 +182,7 @@ def render_grupo(df_raw, tab, key):
             fig3.update_traces(line_color="#1e3a5f", line_width=2)
             st.plotly_chart(fig3, use_container_width=True)
         else:
-            st.info("Historial no disponible para este activo.")
+            st.info("Historial no disponible para este activo o límite de consultas alcanzado.")
 
 render_grupo(grupos["BMV"],       tabs[0], "bmv")
 render_grupo(grupos["NYSE"],      tabs[1], "nyse")
@@ -174,13 +191,15 @@ render_grupo(grupos["High Beta"], tabs[3], "hbeta")
 render_grupo(grupos["Crypto"],    tabs[4], "crypto")
 
 with tabs[5]:
-    st.subheader("📰 Noticias del Mercado")
+    st.subheader("📰 Noticias del Mercado (Tiempo Real)")
     for n in noticias:
         st.markdown(f"""
 <div style="background:#f8faff;border-left:4px solid #1e3a5f;
 padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0">
-<div style="font-weight:bold">{n['titulo']}</div>
-<div style="color:#666;font-size:12px">{n['fuente']} · {n['fecha']}</div>
+<a href="{n['url']}" target="_blank" style="text-decoration:none;color:inherit;">
+<div style="font-weight:bold;font-size:1.1rem;">{n['titulo']}</div>
+</a>
+<div style="color:#666;font-size:12px;margin-top:4px;">{n['fuente']} · {n['fecha']}</div>
 </div>""", unsafe_allow_html=True)
 
 with tabs[6]:
@@ -195,12 +214,12 @@ with tabs[6]:
     if buscar and ticker_input:
         with st.spinner(f"Buscando {ticker_input.upper()}..."):
             dato = obtener_quote(ticker_input.upper())
-        if dato:
+        if dato and "error" not in dato:
             st.success(f"✅ {dato['Ticker']}")
             c1,c2,c3 = st.columns(3)
             c1.metric("💵 Precio",   f"${fmt_num(dato['Precio'])}")
             c2.metric("📊 Cambio %", f"{dato['Cambio %']:+.2f}%")
-            c3.metric("📌 Señal",    "—")
+            c3.metric("📌 P/E",    f"{dato['P/E']}" if dato['P/E'] else "—")
             with st.spinner("Cargando historial..."):
                 hist = obtener_historial(ticker_input.upper())
             if not hist.empty:
@@ -209,6 +228,8 @@ with tabs[6]:
                 fig.update_layout(plot_bgcolor="white", height=350)
                 fig.update_traces(line_color="#1e3a5f", line_width=2)
                 st.plotly_chart(fig, use_container_width=True)
+        elif dato.get("error") == "rate_limit":
+            st.error("⚠️ Límite de consultas a la API alcanzado. Espera un momento.")
         else:
             st.error(f"No se encontró '{ticker_input}'.")
 

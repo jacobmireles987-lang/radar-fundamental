@@ -1,5 +1,7 @@
 import requests
-import pandas as pd
+from datetime import datetime
+
+API_KEY = "d8k6lmpr01qjgd6ruqs0d8k6lmpr01qjgd6ruqsg"
 
 def obtener_fear_greed():
     try:
@@ -19,20 +21,28 @@ def obtener_fear_greed():
     return {"valor": 50, "label": "Neutral", "emoji": "😐", "color": "#FFA500"}
 
 def obtener_noticias_mercado():
-    return [
-        {"titulo": "Mercados al alza por datos de empleo en EE.UU.",
-         "fuente": "El Financiero", "url": "#", "fecha": "2026-06-09"},
-        {"titulo": "Bitcoin supera resistencia clave",
-         "fuente": "CriptoNoticias", "url": "#", "fecha": "2026-06-09"},
-        {"titulo": "BMV cierra con ganancias lideradas por AMXL",
-         "fuente": "El Economista", "url": "#", "fecha": "2026-06-09"},
-        {"titulo": "Penny stocks disparan volumen en sesión volátil",
-         "fuente": "Investing.com", "url": "#", "fecha": "2026-06-09"},
-        {"titulo": "Fed mantiene tasas: impacto en bolsas emergentes",
-         "fuente": "Bloomberg MX", "url": "#", "fecha": "2026-06-09"},
-        {"titulo": "NVDA alcanza nuevo máximo histórico",
-         "fuente": "Reuters", "url": "#", "fecha": "2026-06-09"},
-    ]
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/news",
+            params={"category": "general", "token": API_KEY},
+            timeout=10
+        )
+        if r.status_code == 200:
+            noticias_raw = r.json()[:6] # Tomamos solo las últimas 6 noticias
+            noticias_formateadas = []
+            for n in noticias_raw:
+                fecha_str = datetime.fromtimestamp(n.get("datetime", 0)).strftime('%Y-%m-%d %H:%M')
+                noticias_formateadas.append({
+                    "titulo": n.get("headline", "Sin titular"),
+                    "fuente": n.get("source", "Desconocido"),
+                    "url": n.get("url", "#"),
+                    "fecha": fecha_str
+                })
+            return noticias_formateadas
+    except Exception:
+        pass
+        
+    return [{"titulo": "No se pudieron cargar las noticias del mercado", "fuente": "Sistema", "url": "#", "fecha": datetime.now().strftime('%Y-%m-%d')}]
 
 def _emoji_fg(valor):
     if valor <= 25: return "😱"

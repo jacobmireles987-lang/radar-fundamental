@@ -1,10 +1,13 @@
 # acciones_extractor.py
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
 import concurrent.futures
 import time
+import streamlit as st
 
-API_KEY = "d8k6lmpr01qjgd6ruqs0d8k6lmpr01qjgd6ruqsg"
+API_KEY = st.secrets["FINNHUB_API_KEY"]
 
 BMV = ["AMXL.MX","FEMSAUBD.MX","BIMBOA.MX","WALMEX.MX","GMEXICOB.MX",
        "TLEVICPO.MX","AC.MX","GCARSOA1.MX","ALSEA.MX","KOFUBL.MX"]
@@ -15,9 +18,14 @@ CRYPTO = ["BINANCE:BTCUSDT","BINANCE:ETHUSDT","BINANCE:SOLUSDT",
           "BINANCE:BNBUSDT","BINANCE:DOGEUSDT","BINANCE:XRPUSDT",
           "BINANCE:ADAUSDT","BINANCE:AVAXUSDT","BINANCE:DOTUSDT","BINANCE:MATICUSDT"]
 
+# Configuración de sesión robusta
+session = requests.Session()
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+session.mount('https://', HTTPAdapter(max_retries=retries))
+
 def obtener_metricas(symbol: str) -> dict:
     try:
-        r = requests.get(
+        r = session.get(
             "https://finnhub.io/api/v1/stock/metric",
             params={"symbol": symbol, "metric": "all", "token": API_KEY},
             timeout=5
@@ -25,18 +33,19 @@ def obtener_metricas(symbol: str) -> dict:
         if r.status_code == 429:
             return {"beta": 1.0, "pe": 0, "mktcap": 0}
         
+        r.raise_for_status()
         data = r.json().get("metric", {})
         return {
             "beta": data.get("beta", 1.0),
             "pe": data.get("peExclExtraTTM", 0),
             "mktcap": data.get("marketCapitalization", 0)
         }
-    except Exception:
+    except requests.exceptions.RequestException:
         return {"beta": 1.0, "pe": 0, "mktcap": 0}
 
 def obtener_quote(symbol: str) -> dict:
     try:
-        r = requests.get(
+        r = session.get(
             "https://finnhub.io/api/v1/quote",
             params={"symbol": symbol, "token": API_KEY},
             timeout=10
@@ -44,6 +53,7 @@ def obtener_quote(symbol: str) -> dict:
         if r.status_code == 429:
             return {"error": "rate_limit"}
             
+        r.raise_for_status()
         data = r.json()
         precio   = data.get("c", 0)
         anterior = data.get("pc", precio)
@@ -67,12 +77,12 @@ def obtener_quote(symbol: str) -> dict:
             "Mkt Cap"      : metricas["mktcap"],
             "Recomendacion": "—",
         }
-    except Exception:
+    except requests.exceptions.RequestException:
         return {}
 
 def obtener_crypto_quote(symbol: str) -> dict:
     try:
-        r = requests.get(
+        r = session.get(
             "https://finnhub.io/api/v1/quote",
             params={"symbol": symbol, "token": API_KEY},
             timeout=10
@@ -80,6 +90,7 @@ def obtener_crypto_quote(symbol: str) -> dict:
         if r.status_code == 429:
             return {"error": "rate_limit"}
             
+        r.raise_for_status()
         data  = r.json()
         precio = data.get("c", 0)
         anterior = data.get("pc", precio)
@@ -100,12 +111,11 @@ def obtener_crypto_quote(symbol: str) -> dict:
             "Mkt Cap"      : None,
             "Recomendacion": "—",
         }
-    except Exception:
+    except requests.exceptions.RequestException:
         return {}
 
 def cargar_grupo(tickers: list, nombre: str, es_crypto: bool = False) -> pd.DataFrame:
     filas = []
-    # Paralelización con máximo de 5 workers para cuidar el rate limit de la capa gratuita
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         if es_crypto:
             resultados = executor.map(obtener_crypto_quote, tickers)
@@ -115,11 +125,10 @@ def cargar_grupo(tickers: list, nombre: str, es_crypto: bool = False) -> pd.Data
         for dato in resultados:
             if dato:
                 if dato.get("error") == "rate_limit":
-                    continue # Omite si llegamos al límite
+                    continue
                 dato["Grupo"] = nombre
                 filas.append(dato)
                 
-    # Pequeña pausa para no saturar la API entre grupos
     time.sleep(1)
     return pd.DataFrame(filas) if filas else pd.DataFrame()
 

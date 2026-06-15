@@ -4,12 +4,13 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from sentimiento_extractor import obtener_fear_greed, obtener_noticias_mercado
 from scorer import score_fundamental, fmt_mktcap, fmt_num
-from acciones_extractor import (obtener_todos, obtener_quote,
-                                 obtener_crypto_quote, API_KEY,
-                                 BMV, NYSE, PENNY, HIGH_BETA, CRYPTO)
+from acciones_extractor import (obtener_todos, obtener_quote, API_KEY)
+import components
 
 st.set_page_config(page_title="Radar Fundamental", page_icon="📈", layout="wide")
 st.title("📈 Radar de Análisis Fundamental")
@@ -19,12 +20,17 @@ if st.button("🔄 Actualizar datos"):
     st.cache_data.clear()
     st.rerun()
 
+# Configurar sesión con reintentos para la gráfica
+session_hist = requests.Session()
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+session_hist.mount('https://', HTTPAdapter(max_retries=retries))
+
 def obtener_historial(symbol: str) -> pd.DataFrame:
     import time as t
     try:
         ahora  = int(t.time())
         inicio = ahora - 60 * 24 * 3600  # 60 días
-        r = requests.get(
+        r = session_hist.get(
             "https://finnhub.io/api/v1/stock/candle",
             params={
                 "symbol"    : symbol,
@@ -39,6 +45,7 @@ def obtener_historial(symbol: str) -> pd.DataFrame:
             st.toast("⚠️ Límite de API alcanzado al cargar el gráfico.", icon="⏳")
             return pd.DataFrame()
             
+        r.raise_for_status()
         data = r.json()
         if data.get("s") != "ok":
             return pd.DataFrame()
@@ -47,7 +54,7 @@ def obtener_historial(symbol: str) -> pd.DataFrame:
             "Close": data["c"],
         })
         return df.sort_values("Date")
-    except Exception:
+    except requests.exceptions.RequestException:
         return pd.DataFrame()
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -60,33 +67,15 @@ with st.spinner("📡 Consultando mercados y calculando fundamentales..."):
 # ── FEAR & GREED ─────────────────────────────────────────────
 st.divider()
 c1,c2,c3,c4,c5 = st.columns(5)
-c1.markdown(f"""
-<div style="background:{fear_greed['color']}22;border:2px solid {fear_greed['color']};
-border-radius:12px;padding:14px;text-align:center">
-<div style="font-size:2rem">{fear_greed['emoji']}</div>
-<div style="font-size:1.4rem;font-weight:bold;color:{fear_greed['color']}">{fear_greed['valor']}/100</div>
-<div style="font-size:0.8rem;color:#666">Fear & Greed Cripto<br>{fear_greed['label']}</div>
-</div>""", unsafe_allow_html=True)
+c1.markdown(components.tarjeta_fear_greed(fear_greed), unsafe_allow_html=True)
 
 for col,(nombre,df) in zip([c2,c3,c4,c5],list(grupos.items())[:4]):
     if not df.empty:
         scored = score_fundamental(df)
         mejor  = scored.iloc[0]
-        col.markdown(f"""
-<div style="background:#f8faff;border:1px solid #d1dcf0;
-border-radius:12px;padding:14px;text-align:center">
-<div style="font-size:0.75rem;color:#666">{nombre}</div>
-<div style="font-size:1.1rem;font-weight:bold">{mejor['Ticker']}</div>
-<div style="font-size:0.9rem;color:#16a34a">Score {mejor['Score']}</div>
-<div style="font-size:0.8rem">{mejor['Señal']}</div>
-</div>""", unsafe_allow_html=True)
+        col.markdown(components.tarjeta_oportunidad(nombre, mejor), unsafe_allow_html=True)
     else:
-        col.markdown("""
-<div style="background:#fff5f5;border:1px solid #fed7d7;
-border-radius:12px;padding:14px;text-align:center">
-<div style="font-size:0.75rem;color:#e53e3e">Datos no disponibles</div>
-<div style="font-size:0.8rem">Límite de API alcanzado</div>
-</div>""", unsafe_allow_html=True)
+        col.markdown(components.tarjeta_error(), unsafe_allow_html=True)
 
 st.divider()
 
@@ -102,41 +91,10 @@ def render_grupo(df_raw, tab, key):
         df = score_fundamental(df_raw)
         st.subheader("📊 Tabla de Oportunidades")
 
-        def fila_html(row):
-            cambio  = row["Cambio %"]
-            color_c = "#16a34a" if cambio >= 0 else "#dc2626"
-            senal   = row["Señal"]
-            color_s = {"🔥 FUERTE":"#16a34a","⚡ MODERADA":"#2563eb",
-                       "👀 OBSERVAR":"#d97706","😴 DÉBIL":"#9ca3af"}.get(senal,"#333")
-            
-            # Formateando métricas que antes estaban en blanco
-            beta_str = f"{row['Beta']:.2f}" if pd.notna(row['Beta']) else "—"
-            pe_str = f"{row['P/E']:.1f}" if pd.notna(row['P/E']) else "—"
-            mkt_str = fmt_mktcap(row['Mkt Cap'])
-            
-            return (
-                f"<tr><td><b>{row['Ticker']}</b></td>"
-                f"<td style='font-size:12px'>{row['Nombre']}</td>"
-                f"<td>${fmt_num(row['Precio'])}</td>"
-                f"<td style='color:{color_c};font-weight:bold'>"
-                f"{'▲' if cambio>=0 else '▼'} {fmt_num(abs(cambio))}%</td>"
-                f"<td>{beta_str}</td><td>{pe_str}</td><td>{mkt_str}</td>"
-                f"<td style='font-weight:bold;color:{color_s}'>{senal}</td>"
-                f"<td style='font-weight:bold;color:#1e3a5f'>{row['Score']}</td></tr>"
-            )
-
         ths = "".join(f"<th>{h}</th>" for h in
                       ["Ticker","Nombre","Precio","Cambio %","Beta","P/E","Mkt Cap","Señal","Score"])
-        trs = "".join(fila_html(r) for _,r in df.iterrows())
-        st.markdown(f"""
-<style>
-.ft{{width:100%;border-collapse:collapse;font-size:13px}}
-.ft th{{background:#1e3a5f;color:white;padding:8px 10px;text-align:left}}
-.ft tr:nth-child(even){{background:#f0f4ff}}
-.ft td{{padding:7px 10px;border-bottom:1px solid #e2e8f0}}
-</style>
-<table class="ft"><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>
-""", unsafe_allow_html=True)
+        trs = "".join(components.fila_tabla(r, fmt_num, fmt_mktcap) for _,r in df.iterrows())
+        st.markdown(components.css_tabla(ths, trs), unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         col1,col2 = st.columns(2)
@@ -193,14 +151,7 @@ render_grupo(grupos["Crypto"],    tabs[4], "crypto")
 with tabs[5]:
     st.subheader("📰 Noticias del Mercado (Tiempo Real)")
     for n in noticias:
-        st.markdown(f"""
-<div style="background:#f8faff;border-left:4px solid #1e3a5f;
-padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0">
-<a href="{n['url']}" target="_blank" style="text-decoration:none;color:inherit;">
-<div style="font-weight:bold;font-size:1.1rem;">{n['titulo']}</div>
-</a>
-<div style="color:#666;font-size:12px;margin-top:4px;">{n['fuente']} · {n['fecha']}</div>
-</div>""", unsafe_allow_html=True)
+        st.markdown(components.tarjeta_noticia(n), unsafe_allow_html=True)
 
 with tabs[6]:
     st.subheader("🔍 Busca cualquier activo")

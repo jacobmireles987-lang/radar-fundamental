@@ -1,11 +1,10 @@
-# scorer.py
 import pandas as pd
 import numpy as np
 
 def score_fundamental(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula un score fundamental basado en volumen, cambio, distancia al bajo de 52 semanas y P/E.
-    Devuelve un DataFrame ordenado por Score descendente.
+    Calcula un score fundamental y emite señales de compra/venta basadas en 
+    múltiplos (PER), capitalización (Mkt Cap <= 100M) e indicadores técnicos.
     """
     if df.empty:
         return df
@@ -18,17 +17,20 @@ def score_fundamental(df: pd.DataFrame) -> pd.DataFrame:
     precio  = pd.to_numeric(df["Precio"], errors="coerce").fillna(0)
     bajo_52 = pd.to_numeric(df["52w Bajo"], errors="coerce").fillna(0)
     pe      = pd.to_numeric(df["P/E"], errors="coerce").fillna(15) 
+    mktcap  = pd.to_numeric(df["Mkt Cap"], errors="coerce").fillna(0)
     
     distancia = (precio - bajo_52) / precio.replace(0, np.nan)
 
+    # Cálculo del Score Base (0 a 100)
     score_volumen = _normalizar(vol) * 20
     score_cambio = _normalizar(cambio) * 30
     score_distancia = (1 - _normalizar(distancia.fillna(0.5))) * 25
-    
-    score_pe = np.where((pe > 0) & (pe < 30), 25, np.where((pe >= 30) & (pe < 50), 10, 0))
+    score_pe = np.where((pe > 0) & (pe <= 20), 25, np.where((pe > 20) & (pe < 50), 10, 0))
     
     df["Score"] = (score_volumen + score_cambio + score_distancia + score_pe).round(1)
-    df["Señal"] = df["Score"].apply(_senal)
+    
+    # Aplicamos la lógica de señales evaluando toda la fila
+    df["Señal"] = df.apply(_senal_avanzada, axis=1)
     
     return df.sort_values("Score", ascending=False)
 
@@ -39,15 +41,31 @@ def _normalizar(serie: pd.Series) -> pd.Series:
         return pd.Series(np.ones(len(serie)), index=serie.index)
     return (serie - mn) / (mx - mn)
 
-def _senal(score: float) -> str:
-    """Devuelve un emoji y una etiqueta en texto según el score calculado."""
-    if score >= 75: return "🔥 FUERTE"
-    if score >= 55: return "⚡ MODERADA"
-    if score >= 35: return "👀 OBSERVAR"
-    return "😴 DÉBIL"
+def _senal_avanzada(row: pd.Series) -> str:
+    """Cruza los indicadores para emitir la recomendación final."""
+    score = row["Score"]
+    pe = row["P/E"]
+    mktcap = row["Mkt Cap"]
+    
+    # Criterios solicitados:
+    buen_per = pd.notna(pe) and 0 < pe <= 20
+    micro_cap = pd.notna(mktcap) and mktcap <= 100 and mktcap > 0
+    
+    # Emisión de señales
+    if score >= 70 and buen_per and micro_cap:
+        return "💎 COMPRA IDEAL (MicroCap)"
+    elif score >= 75:
+        return "🔥 COMPRA FUERTE"
+    elif score >= 55:
+        return "⚡ COMPRA MODERADA"
+    elif score <= 30:
+        return "🩸 VENTA FUERTE"
+    elif score <= 45:
+        return "📉 VENTA"
+    else:
+        return "😴 NEUTRAL"
 
 def fmt_mktcap(val) -> str:
-    """Formatea la capitalización de mercado para una fácil lectura."""
     if pd.isna(val) or val == 0:
         return "—"
     try:
@@ -59,7 +77,6 @@ def fmt_mktcap(val) -> str:
         return "—"
 
 def fmt_num(val, decimals: int = 2) -> str:
-    """Convierte un valor numérico a un string con formato de moneda."""
     try:
         return f"{float(val):,.{decimals}f}"
     except Exception:

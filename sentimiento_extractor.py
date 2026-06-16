@@ -2,9 +2,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime
-import streamlit as st
 
-API_KEY = st.secrets["FINNHUB_API_KEY"]
+# Regresamos la API Key directa al código
+API_KEY = "d8k6lmpr01qjgd6ruqs0d8k6lmpr01qjgd6ruqsg"
 
 # Configuración de sesión robusta
 session = requests.Session()

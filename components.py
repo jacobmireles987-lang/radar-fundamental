@@ -41,7 +41,7 @@ def fila_tabla(row: pd.Series, fmt_num_func, fmt_mktcap_func) -> str:
     cambio  = row["Cambio %"]
     color_c = "#16a34a" if cambio >= 0 else "#dc2626"
     senal   = row["Señal"]
-    
+
     color_s = {
         "💎 COMPRA IDEAL (MicroCap)": "#8b5cf6",
         "🔥 COMPRA FUERTE": "#16a34a",
@@ -50,11 +50,11 @@ def fila_tabla(row: pd.Series, fmt_num_func, fmt_mktcap_func) -> str:
         "📉 VENTA": "#dc2626",
         "😴 NEUTRAL": "#9ca3af"
     }.get(senal, "#333")
-    
+
     beta_str = f"{row['Beta']:.2f}" if pd.notna(row['Beta']) else "—"
     pe_str = f"{row['P/E']:.1f}" if pd.notna(row['P/E']) else "—"
     mkt_str = fmt_mktcap_func(row['Mkt Cap'])
-    
+
     return (
         f"<tr><td><b>{row['Ticker']}</b></td>"
         f"<td style='font-size:12px'>{row['Nombre']}</td>"

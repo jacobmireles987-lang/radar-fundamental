@@ -1,10 +1,20 @@
+import os
 import requests
+import streamlit as st
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime
 
-# Regresamos la API Key directa al código
-API_KEY = "d8k6lmpr01qjgd6ruqs0d8k6lmpr01qjgd6ruqsg"
+from rate_limiter import limitador_finnhub
+
+
+def _obtener_api_key() -> str:
+    try:
+        return st.secrets["FINNHUB_API_KEY"]
+    except Exception:
+        return os.environ.get("FINNHUB_API_KEY", "")
+
+API_KEY = _obtener_api_key()
 
 # Configuración de sesión robusta
 session = requests.Session()
@@ -29,6 +39,7 @@ def obtener_fear_greed() -> dict:
 
 def obtener_noticias_mercado() -> list:
     try:
+        limitador_finnhub.esperar()
         r = session.get(
             "https://finnhub.io/api/v1/news",
             params={"category": "general", "token": API_KEY},

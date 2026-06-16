@@ -4,9 +4,9 @@ from urllib3.util.retry import Retry
 import pandas as pd
 import concurrent.futures
 import time
-import streamlit as st
 
-API_KEY = st.secrets["FINNHUB_API_KEY"]
+# Regresamos la API Key directa al código
+API_KEY = "d8k6lmpr01qjgd6ruqs0d8k6lmpr01qjgd6ruqsg"
 
 BMV = ["AMXL.MX","FEMSAUBD.MX","BIMBOA.MX","WALMEX.MX","GMEXICOB.MX",
        "TLEVICPO.MX","AC.MX","GCARSOA1.MX","ALSEA.MX","KOFUBL.MX"]
